@@ -155,6 +155,8 @@ sudo apt-get install bluez bluetooth
 
 ## Project Structure
 
+> **Note:** Some directory and file names contain typos (e.g., `experment_code_2` instead of `experiment_code_2`, `joystick_contoler.py` instead of `joystick_controller.py`). These names are documented as they exist in the repository.
+
 ```
 semi-autonomous_vehicle_project/
 ├── README.md                          # This file
