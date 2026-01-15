@@ -1,0 +1,21 @@
+# Python Dependencies for Semi-Autonomous Vehicle Project
+# Install with: pip install -r requirements.txt
+
+# Joystick and game controller support
+pygame>=2.0.0
+
+# HTTP requests for REST API communication with ESP32
+requests>=2.25.0
+
+# WebSocket communication for real-time control
+websockets>=10.0
+
+# Bluetooth support (optional - for Bluetooth joystick control)
+# Note: Requires system Bluetooth libraries (see README for installation)
+# Uncomment the line below if using Bluetooth joystick control:
+# pybluez>=0.23
+
+# Built-in libraries (no installation needed):
+# - asyncio (Python 3.7+)
+# - json (built-in)
+# - sys (built-in)
