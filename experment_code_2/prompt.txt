@@ -1,0 +1,1871 @@
+i am trying to build an rc car which will work both in autonomus mode and mannual mode based on my command sent from my laptop webpage.
+the car will have esp32 wroom, motor driver, battery,2 wheels,sonar sensor and jumper wires. when i toggle to autonomus mode my car will move on its own avoiding obstacles with the help of sonar sensor. 
+when i toggle to mannual mode i want to control the car using usb wired joystick which is connected in my laptop. i have wrote code but the mannual mode is not working at all.
+when i toggle to autonomous mode the car moves randomly and try to smash through obstacles.
+ now i will give you the 3 different parts of code of my rc car. i want you to analyze them and fix every error and write extra code if necessary
+ are you ready ?
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RC Car Control Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .dashboard {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        img {
+            max-width: 100%;
+            border: 2px solid #333;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .data {
+            display: flex;
+            justify-content: space-around;
+            margin: 20px 0;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <h1>RC Car Control Dashboard</h1>
+        
+        <img id="cameraFeed" src="http://192.168.0.194:8080/video" 
+             alt="Live Camera Feed" 
+             onerror="this.src='placeholder.jpg'; this.alt='Camera Unavailable'"/>
+        
+        <div class="data">
+            <div>
+                <h3>Obstacle Distance</h3>
+                <p id="distance">0 cm</p>
+            </div>
+            <div>
+                <h3>Current Mode</h3>
+                <p id="currentMode">Manual</p>
+            </div>
+        </div>
+        
+        <button id="toggleMode">Switch to Autonomous</button>
+    </div>
+
+    <script>
+        const cameraFeed = document.getElementById('cameraFeed');
+        const distanceSpan = document.getElementById('distance');
+        const currentModeSpan = document.getElementById('currentMode');
+        const toggleButton = document.getElementById('toggleMode');
+
+        // WebSocket Connection 
+        let ws = new WebSocket("ws://192.168.0.191:81");
+
+        ws.onopen = () => {
+            console.log("WebSocket connection established");
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                
+                switch(data.type) {
+                    case "distance":
+                        distanceSpan.textContent = `${data.value} cm`;
+                        break;
+                    case "joystick":
+                        console.log("Joystick Data:", data);
+                        break;
+                }
+            } catch (error) {
+                console.error("WebSocket message error:", error);
+            }
+        };
+
+        ws.onclose = () => {
+            console.log("WebSocket connection closed");
+            setTimeout(() => {
+                ws = new WebSocket("ws://192.168.0.191:81");
+            }, 3000);
+        };
+
+        // Mode Toggle
+        let isAutonomous = false;
+        toggleButton.addEventListener('click', () => {
+            isAutonomous = !isAutonomous;
+            
+            toggleButton.textContent = isAutonomous 
+                ? "Switch to Manual" 
+                : "Switch to Autonomous";
+            
+            currentModeSpan.textContent = isAutonomous 
+                ? "Autonomous" 
+                : "Manual";
+            
+            // Send mode change to ESP32
+            const modeMessage = JSON.stringify({
+                type: "mode",
+                mode: isAutonomous ? "autonomous" : "manual"
+            });
+            ws.send(modeMessage);
+        });
+    </script>
+</body>
+</html>
+
+import pygame
+import requests
+import websockets
+import asyncio
+import json
+
+# Configuration
+ESP32_IP = "http://192.168.0.191"
+WEBSOCKET_URL = "ws://192.168.0.191:81"
+CAMERA_URL = "http://192.168.0.194:8080/video"
+
+class RCCarController:
+    def __init__(self):
+        pygame.init()
+        pygame.joystick.init()
+        
+        if pygame.joystick.get_count() == 0:
+            print("No joystick detected!")
+            raise Exception("No joystick connected")
+        
+        self.joystick = pygame.joystick.Joystick(0)
+        self.joystick.init()
+        
+        self.is_autonomous = False
+        self.current_mode = "manual"
+        self.websocket = None
+
+    def send_http_command(self, command):
+        """Send movement command to ESP32 via HTTP"""
+        url = f"{ESP32_IP}/move?cmd={command}"
+        try:
+            response = requests.get(url, timeout=0.5)
+            print(f"Sent command: {command}, Response: {response.text}")
+        except Exception as e:
+            print(f"HTTP Command Error: {e}")
+
+    async def connect_websocket(self):
+        """Enhanced WebSocket connection with retry"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                self.websocket = await websockets.connect(WEBSOCKET_URL)
+                print("WebSocket connected successfully")
+                return
+            except Exception as e:
+                print(f"WebSocket connection attempt {attempt + 1} failed: {e}")
+                await asyncio.sleep(2)
+        
+        raise ConnectionError("Could not establish WebSocket connection")
+
+    async def send_websocket_mode(self, mode):
+        """Send mode change via WebSocket"""
+        if self.websocket:
+            try:
+                message = json.dumps({
+                    "type": "mode",
+                    "mode": mode
+                })
+                await self.websocket.send(message)
+                print(f"Mode changed to: {mode}")
+            except Exception as e:
+                print(f"WebSocket send error: {e}")
+
+    async def send_joystick_data(self, x, y):
+        """Send normalized joystick data via WebSocket"""
+        if self.websocket:
+            try:
+                message = json.dumps({
+                    "type": "joystick",
+                    "x": x,
+                    "y": y
+                })
+                await self.websocket.send(message)
+            except Exception as e:
+                print(f"Joystick data send error: {e}")
+
+    async def receive_websocket_data(self):
+        """Listen for WebSocket messages"""
+        while True:
+            try:
+                message = await self.websocket.recv()
+                data = json.loads(message)
+                
+                if data.get('type') == 'distance':
+                    print(f"Obstacle Distance: {data['value']} cm")
+            except websockets.exceptions.ConnectionClosed:
+                print("WebSocket connection closed")
+                break
+            except Exception as e:
+                print(f"WebSocket receive error: {e}")
+            
+            await asyncio.sleep(0.1)
+
+    async def handle_joystick_input(self):
+        """Enhanced joystick input processing"""
+        DEADZONE = 0.2
+        
+        while True:
+            pygame.event.pump()
+            
+            x_axis = self.joystick.get_axis(0)
+            y_axis = self.joystick.get_axis(1)
+            
+            # Apply deadzone
+            x_axis = 0 if abs(x_axis) < DEADZONE else x_axis
+            y_axis = 0 if abs(y_axis) < DEADZONE else y_axis
+            
+            # Normalize axis values
+            x_normalized = int(x_axis * 100)
+            y_normalized = int(y_axis * 100)
+            
+            if self.current_mode == "manual":
+                await self.send_joystick_data(x_normalized, y_normalized)
+            
+            # Mode toggle logic
+            if self.joystick.get_button(0):
+                await self.toggle_mode()
+            
+            await asyncio.sleep(0.1)
+
+    async def toggle_mode(self):
+        """Toggle between manual and autonomous modes"""
+        self.is_autonomous = not self.is_autonomous
+        self.current_mode = "autonomous" if self.is_autonomous else "manual"
+        await self.send_websocket_mode(self.current_mode)
+
+    async def main(self):
+        """Enhanced main control loop"""
+        await self.connect_websocket()
+        
+        tasks = [
+            asyncio.create_task(self.handle_joystick_input()),
+            asyncio.create_task(self.receive_websocket_data())
+        ]
+        
+        await asyncio.gather(*tasks)
+
+if __name__ == "__main__":
+    try:
+        controller = RCCarController()
+        asyncio.run(controller.main())
+    except Exception as e:
+        print(f"RC Car Controller Error: {e}")
+    finally:
+        pygame.quit()
+
+#include <WiFi.h>
+#include <WebServer.h>
+#include <WebSocketsServer.h>
+#include <ArduinoJson.h>
+
+const char* ssid = "Jayid wifi";
+const char* password = "uiu+ds23";
+
+// Motor Driver Pins
+const int motor1Forward = 25;
+const int motor1Backward = 26;
+const int motor2Forward = 27;
+const int motor2Backward = 14;
+const int motor1Enable = 32;
+const int motor2Enable = 33;
+
+// Sonar Sensor Pins
+const int triggerPin = 5;
+const int echoPin = 18;
+
+WebServer server(80);
+WebSocketsServer webSocket = WebSocketsServer(81);
+
+String currentMode = "manual";
+
+// Distance Measurement Function
+// Improve distance measurement reliability
+long getDistance() {
+    // Take multiple readings for accuracy
+    long totalDistance = 0;
+    int numReadings = 5;
+    
+    for (int i = 0; i < numReadings; i++) {
+        digitalWrite(triggerPin, LOW);
+        delayMicroseconds(2);
+        digitalWrite(triggerPin, HIGH);
+        delayMicroseconds(10);
+        digitalWrite(triggerPin, LOW);
+        
+        long duration = pulseIn(echoPin, HIGH, 20000);  // Added timeout
+        totalDistance += duration / 58.2;
+        delay(10);
+    }
+    
+    long averageDistance = totalDistance / numReadings;
+    return constrain(averageDistance, 0, 400);
+}
+
+// Motor Control Functions
+void moveForward() {
+    digitalWrite(motor1Forward, HIGH);
+    digitalWrite(motor1Backward, LOW);
+    digitalWrite(motor2Forward, HIGH);
+    digitalWrite(motor2Backward, LOW);
+}
+
+void moveBackward() {
+    digitalWrite(motor1Forward, LOW);
+    digitalWrite(motor1Backward, HIGH);
+    digitalWrite(motor2Forward, LOW);
+    digitalWrite(motor2Backward, HIGH);
+}
+
+void turnLeft() {
+    digitalWrite(motor1Forward, HIGH);
+    digitalWrite(motor1Backward, LOW);
+    digitalWrite(motor2Forward, LOW);
+    digitalWrite(motor2Backward, HIGH);
+}
+
+void turnRight() {
+    digitalWrite(motor1Forward, LOW);
+    digitalWrite(motor1Backward, HIGH);
+    digitalWrite(motor2Forward, HIGH);
+    digitalWrite(motor2Backward, LOW);
+}
+
+void stopMotors() {
+    digitalWrite(motor1Forward, LOW);
+    digitalWrite(motor1Backward, LOW);
+    digitalWrite(motor2Forward, LOW);
+    digitalWrite(motor2Backward, LOW);
+}
+
+// Enhanced WebSocket Event Handler
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+    switch (type) {
+        case WStype_TEXT: {
+            StaticJsonDocument<200> doc;
+            DeserializationError error = deserializeJson(doc, (char*)payload);
+            
+            if (error) {
+                Serial.println("WebSocket JSON parsing error");
+                return;
+            }
+
+            if (doc.containsKey("type")) {
+                const char* type = doc["type"];
+                
+                // Mode Change
+                if (strcmp(type, "mode") == 0) {
+                    const char* mode = doc["mode"];
+                    currentMode = mode;
+                    Serial.printf("Mode changed to: %s\n", currentMode.c_str());
+                }
+                
+                // Joystick Control
+                if (currentMode == "manual" && strcmp(type, "joystick") == 0) {
+                    int x = doc["x"];
+                    int y = doc["y"];
+                    
+                    // Directional control based on joystick input
+                    if (y > 50) moveForward();
+                    else if (y < -50) moveBackward();
+                    
+                    if (x > 50) turnRight();
+                    else if (x < -50) turnLeft();
+                    
+                    if (abs(x) < 20 && abs(y) < 20) stopMotors();
+                }
+            }
+            break;
+        }
+    }
+}
+
+// Advanced Autonomous Mode
+// Enhanced Autonomous Navigation Algorithm
+void autonomousMode() {
+    long distance = getDistance();
+    
+    // Debug: Print detailed navigation information
+    Serial.print("Autonomous Mode - Distance: ");
+    Serial.print(distance);
+    Serial.println(" cm");
+    
+    // Broadcast distance for dashboard
+    StaticJsonDocument<200> doc;
+    doc["type"] = "distance";
+    doc["value"] = distance;
+    String jsonString;
+    serializeJson(doc, jsonString);
+    webSocket.broadcastTXT(jsonString);
+    
+    // More Intelligent Obstacle Avoidance
+    if (distance < 30) {  // Critical proximity threshold
+        stopMotors();
+        delay(500);
+        
+        // Random directional change with angle variation
+        int turnDirection = random(2);
+        int turnDuration = random(800, 1500);  // Varied turn duration
+        
+        if (turnDirection == 0) {
+            turnLeft();
+            Serial.println("Turning Left to Avoid Obstacle");
+        } else {
+            turnRight();
+            Serial.println("Turning Right to Avoid Obstacle");
+        }
+        
+        delay(turnDuration);
+        stopMotors();
+    } 
+    else if (distance < 50) {  // Cautious approach zone
+        // Gradual speed reduction or careful movement
+        moveForward();
+        Serial.println("Cautious Forward Movement");
+    } 
+    else {
+        // Open path - confident forward movement
+        moveForward();
+        Serial.println("Clear Path - Moving Forward");
+    }
+    
+    // Add small delay to prevent overwhelming processor
+    delay(100);
+}
+
+void setup() {
+    Serial.begin(115200);
+    Serial.println("RC Car Initialization");
+    Serial.printf("Motor Pins: F1=%d, B1=%d, F2=%d, B2=%d\n", 
+                  motor1Forward, motor1Backward, 
+                  motor2Forward, motor2Backward);
+    Serial.printf("Sonar Pins: Trigger=%d, Echo=%d\n", 
+                  triggerPin, echoPin);
+
+    // Pin Setup
+    pinMode(motor1Forward, OUTPUT);
+    pinMode(motor1Backward, OUTPUT);
+    pinMode(motor2Forward, OUTPUT);
+    pinMode(motor2Backward, OUTPUT);
+    pinMode(motor1Enable, OUTPUT);
+    pinMode(motor2Enable, OUTPUT);
+
+    pinMode(triggerPin, OUTPUT);
+    pinMode(echoPin, INPUT);
+
+    digitalWrite(motor1Enable, HIGH);
+    digitalWrite(motor2Enable, HIGH);
+
+    stopMotors();
+    randomSeed(analogRead(0));
+
+    // WiFi Connection
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nWiFi connected");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+
+    // WebSocket and Server Setup
+    webSocket.begin();
+    webSocket.onEvent(webSocketEvent);
+    server.begin();
+}
+
+void loop() {
+    webSocket.loop();
+    server.handleClient();
+
+    if (currentMode == "autonomous") {
+        autonomousMode();
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+writin new prompt
+
+web page code:
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RC Car Control Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .dashboard {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        .connection-status {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .connected {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .disconnected {
+            background-color: #f44336;
+            color: white;
+        }
+        /* Rest of previous CSS remains the same */
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <h1>RC Car Control Dashboard</h1>
+        
+        <div id="connectionStatus" class="connection-status disconnected">
+            Disconnected from WebSocket
+        </div>
+        
+        <img id="cameraFeed" src="http://192.168.0.194:8080/video" 
+             alt="Live Camera Feed" 
+             onerror="this.src='placeholder.jpg'; this.alt='Camera Unavailable'"/>
+        
+        <div class="data">
+            <div>
+                <h3>Obstacle Distance</h3>
+                <p id="distance">0 cm</p>
+            </div>
+            <div>
+                <h3>Current Mode</h3>
+                <p id="currentMode">Manual</p>
+            </div>
+        </div>
+        
+        <button id="toggleMode">Switch to Autonomous</button>
+    </div>
+
+    <script>
+        const connectionStatus = document.getElementById('connectionStatus');
+        const cameraFeed = document.getElementById('cameraFeed');
+        const distanceSpan = document.getElementById('distance');
+        const currentModeSpan = document.getElementById('currentMode');
+        const toggleButton = document.getElementById('toggleMode');
+
+        function connectWebSocket() {
+            const ws = new WebSocket("ws://192.168.0.191:81");
+
+            ws.onopen = () => {
+                console.log("WebSocket connection established");
+                connectionStatus.textContent = "Connected to WebSocket";
+                connectionStatus.classList.remove('disconnected');
+                connectionStatus.classList.add('connected');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    switch(data.type) {
+                        case "distance":
+                            distanceSpan.textContent = `${data.value} cm`;
+                            break;
+                        case "joystick":
+                            console.log("Joystick Data:", data);
+                            break;
+                    }
+                } catch (error) {
+                    console.error("WebSocket message error:", error);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log("WebSocket connection closed");
+                connectionStatus.textContent = "Disconnected from WebSocket";
+                connectionStatus.classList.remove('connected');
+                connectionStatus.classList.add('disconnected');
+                
+                // Reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            return ws;
+        }
+
+        let ws = connectWebSocket();
+        let isAutonomous = false;
+
+        toggleButton.addEventListener('click', () => {
+            isAutonomous = !isAutonomous;
+            
+            toggleButton.textContent = isAutonomous 
+                ? "Switch to Manual" 
+                : "Switch to Autonomous";
+            
+            currentModeSpan.textContent = isAutonomous 
+                ? "Autonomous" 
+                : "Manual";
+            
+            // Send mode change to ESP32
+            const modeMessage = JSON.stringify({
+                type: "mode",
+                mode: isAutonomous ? "autonomous" : "manual"
+            });
+            ws.send(modeMessage);
+        });
+    </script>
+</body>
+</html>
+
+
+joystick controller python code:
+import pygame
+import asyncio
+import websockets
+import json
+import sys
+
+# Configuration
+ESP32_IP = "192.168.0.191"
+WEBSOCKET_URL = f"ws://{ESP32_IP}:81"
+
+class RCCarController:
+    def __init__(self):
+        pygame.init()
+        pygame.joystick.init()
+        
+        self.setup_joystick()
+        
+        self.is_autonomous = False
+        self.current_mode = "manual"
+        self.websocket = None
+        
+    def setup_joystick(self):
+        """Robust joystick setup with error handling"""
+        try:
+            if pygame.joystick.get_count() == 0:
+                print("No joystick detected! Please connect a joystick.")
+                sys.exit(1)
+            
+            self.joystick = pygame.joystick.Joystick(0)
+            self.joystick.init()
+            print(f"Joystick detected: {self.joystick.get_name()}")
+        except Exception as e:
+            print(f"Joystick initialization error: {e}")
+            sys.exit(1)
+
+    async def connect_websocket(self):
+        """Robust WebSocket connection with exponential backoff"""
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                self.websocket = await websockets.connect(WEBSOCKET_URL)
+                print("WebSocket connected successfully")
+                return
+            except Exception as e:
+                wait_time = 2 ** attempt  # Exponential backoff
+                print(f"WebSocket connection attempt {attempt + 1} failed: {e}")
+                print(f"Retrying in {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+        
+        raise ConnectionError("Could not establish WebSocket connection")
+
+    async def send_mode_change(self, mode):
+        """Send mode change via WebSocket"""
+        if self.websocket:
+            try:
+                message = json.dumps({
+                    "type": "mode",
+                    "mode": mode
+                })
+                await self.websocket.send(message)
+                print(f"Mode changed to: {mode}")
+            except Exception as e:
+                print(f"WebSocket mode change error: {e}")
+
+    async def send_joystick_data(self, x, y):
+        """Send normalized joystick data via WebSocket"""
+        if self.websocket and self.current_mode == "manual":
+            try:
+                message = json.dumps({
+                    "type": "joystick",
+                    "x": x,
+                    "y": y
+                })
+                await self.websocket.send(message)
+            except Exception as e:
+                print(f"Joystick data send error: {e}")
+
+    async def handle_joystick_input(self):
+        """Enhanced joystick input processing with state management"""
+        DEADZONE = 0.2
+        last_mode_button_state = False
+        
+        while True:
+            pygame.event.pump()
+            
+            # Joystick axes
+            x_axis = self.joystick.get_axis(0)
+            y_axis = self.joystick.get_axis(1)
+            
+            # Apply deadzone
+            x_axis = 0 if abs(x_axis) < DEADZONE else x_axis
+            y_axis = 0 if abs(y_axis) < DEADZONE else y_axis
+            
+            # Normalize axis values
+            x_normalized = int(x_axis * 100)
+            y_normalized = int(y_axis * 100)
+            
+            # Joystick data transmission
+            await self.send_joystick_data(x_normalized, y_normalized)
+            
+            # Mode toggle with button debounce
+            current_mode_button_state = self.joystick.get_button(0)
+            if current_mode_button_state and not last_mode_button_state:
+                await self.toggle_mode()
+            
+            last_mode_button_state = current_mode_button_state
+            
+            await asyncio.sleep(0.05)  # Reduced sleep for responsiveness
+
+    async def toggle_mode(self):
+        """Toggle between manual and autonomous modes"""
+        self.is_autonomous = not self.is_autonomous
+        self.current_mode = "autonomous" if self.is_autonomous else "manual"
+        await self.send_mode_change(self.current_mode)
+
+    async def main(self):
+        """Robust main control loop with error recovery"""
+        try:
+            await self.connect_websocket()
+            
+            tasks = [
+                asyncio.create_task(self.handle_joystick_input()),
+            ]
+            
+            await asyncio.gather(*tasks)
+        
+        except ConnectionError as e:
+            print(f"Connection Error: {e}")
+        except KeyboardInterrupt:
+            print("Controller stopped by user")
+        finally:
+            if self.websocket:
+                await self.websocket.close()
+            pygame.quit()
+
+if __name__ == "__main__":
+    try:
+        controller = RCCarController()
+        asyncio.run(controller.main())
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+
+        
+esp32 code given below to control my 2 wheeler rc car:
+
+#include <WiFi.h>
+#include <WebSocketsServer.h>
+#include <ArduinoJson.h>
+
+// WiFi Configuration
+#define WIFI_SSID "Jayid wifi"
+#define WIFI_PASSWORD "uiu+ds23"
+#define WEBSOCKET_PORT 81
+
+// Motor Driver Configuration
+struct MotorConfig {
+    int forward;
+    int backward;
+    int enable;
+};
+
+const MotorConfig LEFT_MOTOR = {25, 26, 32};
+const MotorConfig RIGHT_MOTOR = {27, 14, 33};
+
+// Sonar Sensor Pin Configuration
+const int TRIGGER_PIN = 5;
+const int ECHO_PIN = 18;
+
+// Operational Modes
+enum OperationMode { MANUAL, AUTONOMOUS };
+OperationMode currentMode = MANUAL;
+
+WebSocketsServer webSocket(WEBSOCKET_PORT);
+
+// Measure distance using the ultrasonic sensor
+long measureDistance() {
+    digitalWrite(TRIGGER_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIGGER_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIGGER_PIN, LOW);
+
+    long duration = pulseIn(ECHO_PIN, HIGH, 20000);
+    return (duration / 58.2);  // Convert duration to centimeters
+}
+
+// Control motor behavior
+void controlMotor(const MotorConfig& motor, bool forward, bool backward) {
+    digitalWrite(motor.forward, forward ? HIGH : LOW);
+    digitalWrite(motor.backward, backward ? HIGH : LOW);
+}
+
+// Movement functions
+void moveForward() {
+    controlMotor(LEFT_MOTOR, true, false);
+    controlMotor(RIGHT_MOTOR, true, false);
+}
+
+void moveBackward() {
+    controlMotor(LEFT_MOTOR, false, true);
+    controlMotor(RIGHT_MOTOR, false, true);
+}
+
+void turnLeft() {
+    controlMotor(LEFT_MOTOR, false, true);
+    controlMotor(RIGHT_MOTOR, true, false);
+}
+
+void turnRight() {
+    controlMotor(LEFT_MOTOR, true, false);
+    controlMotor(RIGHT_MOTOR, false, true);
+}
+
+void stopMotors() {
+    controlMotor(LEFT_MOTOR, false, false);
+    controlMotor(RIGHT_MOTOR, false, false);
+}
+
+// Broadcast distance measurement to the client
+void broadcastDistance(long distance) {
+    StaticJsonDocument<100> doc;
+    doc["type"] = "distance";
+    doc["value"] = distance;
+
+    String jsonString;
+    serializeJson(doc, jsonString);
+    webSocket.broadcastTXT(jsonString);
+}
+
+// Autonomous navigation logic
+void autonomousNavigation() {
+    long distance = measureDistance();
+    broadcastDistance(distance);
+
+    if (distance < 30) {  // Obstacle close
+        stopMotors();
+        delay(200);
+
+        // Random avoidance strategy
+        if (random(2)) {
+            turnLeft();
+        } else {
+            turnRight();
+        }
+        delay(random(500, 1500));
+    } else if (distance < 50) {
+        moveForward();
+        delay(50);  // Move cautiously
+    } else {
+        moveForward();
+    }
+}
+
+// WebSocket event handler
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
+    if (type == WStype_TEXT) {
+        StaticJsonDocument<200> doc;
+        DeserializationError error = deserializeJson(doc, payload);
+
+        if (error) {
+            Serial.print("JSON parsing failed: ");
+            Serial.println(error.c_str());
+            return;
+        }
+
+        const char* messageType = doc["type"];
+        if (strcmp(messageType, "mode") == 0) {
+            const char* mode = doc["mode"];
+            if (strcmp(mode, "autonomous") == 0) {
+                currentMode = AUTONOMOUS;
+                Serial.println("Switched to Autonomous Mode");
+            } else if (strcmp(mode, "manual") == 0) {
+                currentMode = MANUAL;
+                stopMotors();
+                Serial.println("Switched to Manual Mode");
+            }
+        } else if (strcmp(messageType, "joystick") == 0 && currentMode == MANUAL) {
+            int x = doc["x"];
+            int y = doc["y"];
+
+            // Manual control logic based on joystick input
+            if (abs(y) > 20) {  // Forward/Backward
+                if (y > 0) {
+                    moveForward();
+                } else {
+                    moveBackward();
+                }
+            } else if (abs(x) > 20) {  // Turning
+                if (x > 0) {
+                    turnRight();
+                } else {
+                    turnLeft();
+                }
+            } else {
+                stopMotors();
+            }
+        }
+    }
+}
+
+// Initialize pins and motor driver setup
+void setupPins() {
+    pinMode(LEFT_MOTOR.forward, OUTPUT);
+    pinMode(LEFT_MOTOR.backward, OUTPUT);
+    pinMode(LEFT_MOTOR.enable, OUTPUT);
+
+    pinMode(RIGHT_MOTOR.forward, OUTPUT);
+    pinMode(RIGHT_MOTOR.backward, OUTPUT);
+    pinMode(RIGHT_MOTOR.enable, OUTPUT);
+
+    pinMode(TRIGGER_PIN, OUTPUT);
+    pinMode(ECHO_PIN, INPUT);
+
+    digitalWrite(LEFT_MOTOR.enable, HIGH);
+    digitalWrite(RIGHT_MOTOR.enable, HIGH);
+
+    stopMotors();
+}
+
+// Setup WiFi connection
+void setupWiFi() {
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.print("Connecting to WiFi...");
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nWiFi Connected");
+    Serial.println(WiFi.localIP());
+}
+
+// Setup WebSocket server
+void setupWebSocket() {
+    webSocket.begin();
+    webSocket.onEvent(webSocketEvent);
+}
+
+void setup() {
+    Serial.begin(115200);
+    randomSeed(analogRead(0));  // Initialize random seed
+
+    setupPins();
+    setupWiFi();
+    setupWebSocket();
+    Serial.println("Setup complete");
+}
+
+void loop() {
+    webSocket.loop();
+
+    // Periodic distance measurement
+    static unsigned long lastDistanceMeasurement = 0;
+    if (millis() - lastDistanceMeasurement > 500) {  // Measure every 500ms
+        long distance = measureDistance();
+        broadcastDistance(distance);
+        lastDistanceMeasurement = millis();
+    }
+
+    // Handle autonomous navigation
+    if (currentMode == AUTONOMOUS) {
+        autonomousNavigation();
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+look at this code. the code is not working properly when i toggle to autonomous mode in my dashboard:
+#include <WiFi.h>
+#include <WebSocketsServer.h>
+#include <ArduinoJson.h>
+
+// WiFi Configuration
+#define WIFI_SSID "Redmi Note 9 Pro"
+#define WIFI_PASSWORD "22222222"
+// #define WIFI_SSID "UIU-CAIR"
+// #define WIFI_PASSWORD "12345678"
+#define WEBSOCKET_PORT 82
+
+// Motor Driver Configuration
+struct MotorConfig {
+    int forward;
+    int backward;
+    int enable;
+};
+
+const MotorConfig LEFT_MOTOR = {25, 26, 32};
+const MotorConfig RIGHT_MOTOR = {27, 14, 33};
+
+// Sonar Sensor Pin Configuration
+const int TRIGGER_PIN = 5;
+const int ECHO_PIN = 18;
+
+// Operational Modes
+enum OperationMode { MANUAL, AUTONOMOUS };
+OperationMode currentMode = MANUAL;
+
+WebSocketsServer webSocket(WEBSOCKET_PORT);
+
+// Measure distance using the ultrasonic sensor
+long measureDistance() {
+    digitalWrite(TRIGGER_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIGGER_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIGGER_PIN, LOW);
+
+    long duration = pulseIn(ECHO_PIN, HIGH, 20000);
+    return (duration / 58.2);  // Convert duration to centimeters
+}
+
+// Control motor behavior
+void controlMotor(const MotorConfig& motor, bool forward, bool backward) {
+    digitalWrite(motor.forward, forward ? HIGH : LOW);
+    digitalWrite(motor.backward, backward ? HIGH : LOW);
+}
+
+// Movement functions
+void moveForward() {
+    controlMotor(LEFT_MOTOR, true, false);
+    controlMotor(RIGHT_MOTOR, true, false);
+}
+
+void moveBackward() {
+    controlMotor(LEFT_MOTOR, false, true);
+    controlMotor(RIGHT_MOTOR, false, true);
+}
+
+void turnLeft() {
+    controlMotor(LEFT_MOTOR, false, true);
+    controlMotor(RIGHT_MOTOR, true, false);
+}
+
+void turnRight() {
+    controlMotor(LEFT_MOTOR, true, false);
+    controlMotor(RIGHT_MOTOR, false, true);
+}
+
+void stopMotors() {
+    controlMotor(LEFT_MOTOR, false, false);
+    controlMotor(RIGHT_MOTOR, false, false);
+}
+
+// Broadcast distance measurement to the client
+void broadcastDistance(long distance) {
+    StaticJsonDocument<100> doc;
+    doc["type"] = "distance";
+    doc["value"] = distance;
+
+    String jsonString;
+    serializeJson(doc, jsonString);
+    webSocket.broadcastTXT(jsonString);
+}
+
+// Autonomous navigation logic
+void autonomousNavigation() {
+    long distance = measureDistance();
+    broadcastDistance(distance);
+
+    if (distance < 30) {  // Obstacle close
+        stopMotors();
+        delay(200);
+
+        // Random avoidance strategy
+        if (random(2)) {
+            turnLeft();
+        } else {
+            turnRight();
+        }
+        delay(random(500, 1500));
+    } else if (distance < 50) {
+        moveForward();
+        delay(50);  // Move cautiously
+    } else {
+        moveForward();
+    }
+}
+
+// WebSocket event handler
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
+    if (type == WStype_TEXT) {
+        StaticJsonDocument<200> doc;
+        DeserializationError error = deserializeJson(doc, payload);
+
+        if (error) {
+            Serial.print("JSON parsing failed: ");
+            Serial.println(error.c_str());
+            return;
+        }
+
+        const char* messageType = doc["type"];
+        if (strcmp(messageType, "mode") == 0) {
+            const char* mode = doc["mode"];
+            if (strcmp(mode, "autonomous") == 0) {
+                currentMode = AUTONOMOUS;
+                Serial.println("Switched to Autonomous Mode");
+            } else if (strcmp(mode, "manual") == 0) {
+                currentMode = MANUAL;
+                stopMotors();
+                Serial.println("Switched to Manual Mode");
+            }
+        } else if (strcmp(messageType, "joystick") == 0 && currentMode == MANUAL) {
+            int x = doc["x"];
+            int y = doc["y"];
+
+            // Manual control logic based on joystick input
+            if (abs(y) > 20) {  // Forward/Backward
+                if (y > 0) {
+                    moveForward();
+                } else {
+                    moveBackward();
+                }
+            } else if (abs(x) > 20) {  // Turning
+                if (x > 0) {
+                    turnRight();
+                } else {
+                    turnLeft();
+                }
+            } else {
+                stopMotors();
+            }
+        }
+    }
+}
+
+// Initialize pins and motor driver setup
+void setupPins() {
+    pinMode(LEFT_MOTOR.forward, OUTPUT);
+    pinMode(LEFT_MOTOR.backward, OUTPUT);
+    pinMode(LEFT_MOTOR.enable, OUTPUT);
+
+    pinMode(RIGHT_MOTOR.forward, OUTPUT);
+    pinMode(RIGHT_MOTOR.backward, OUTPUT);
+    pinMode(RIGHT_MOTOR.enable, OUTPUT);
+
+    pinMode(TRIGGER_PIN, OUTPUT);
+    pinMode(ECHO_PIN, INPUT);
+
+    digitalWrite(LEFT_MOTOR.enable, HIGH);
+    digitalWrite(RIGHT_MOTOR.enable, HIGH);
+
+    stopMotors();
+}
+
+// Setup WiFi connection
+void setupWiFi() {
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.print("Connecting to WiFi...");
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nWiFi Connected");
+    Serial.println(WiFi.localIP());
+}
+
+// Setup WebSocket server
+void setupWebSocket() {
+    webSocket.begin();
+    webSocket.onEvent(webSocketEvent);
+}
+
+void setup() {
+    Serial.begin(115200);
+    randomSeed(analogRead(0));  // Initialize random seed
+
+    setupPins();
+    setupWiFi();
+    setupWebSocket();
+    Serial.println("Setup complete");
+}
+
+void loop() {
+    webSocket.loop();
+
+    // Periodic distance measurement
+    static unsigned long lastDistanceMeasurement = 0;
+    if (millis() - lastDistanceMeasurement > 500) {  // Measure every 500ms
+        long distance = measureDistance();
+        broadcastDistance(distance);
+        lastDistanceMeasurement = millis();
+    }
+
+    // Handle autonomous navigation
+    if (currentMode == AUTONOMOUS) {
+        autonomousNavigation();
+    }
+}
+now analyze the code given below. try to merge this code properly with the code given below. i want my rc car to work properly whenever i toggle to autonomous mode from my dashboard.
+#include <NewPing.h>
+
+#define TRIG_PIN 12
+#define ECHO_PIN 14
+
+#define MOTOR_LEFT_FWD 25
+#define MOTOR_LEFT_BWD 26
+#define MOTOR_LEFT_ENABLE 33
+#define MOTOR_RIGHT_FWD 27 
+#define MOTOR_RIGHT_BWD 18
+#define MOTOR_RIGHT_ENABLE 19
+
+#define MAX_DISTANCE 200
+#define SAFE_DISTANCE 30
+
+// Adjust this value to slow down the faster motor
+#define LEFT_MOTOR_SPEED_COMPENSATION 90
+
+NewPing sonar(TRIG_PIN, ECHO_PIN, MAX_DISTANCE);
+
+void setup() {
+  pinMode(MOTOR_LEFT_FWD, OUTPUT);
+  pinMode(MOTOR_LEFT_BWD, OUTPUT);
+  pinMode(MOTOR_LEFT_ENABLE, OUTPUT);
+  pinMode(MOTOR_RIGHT_FWD, OUTPUT);
+  pinMode(MOTOR_RIGHT_BWD, OUTPUT);
+  pinMode(MOTOR_RIGHT_ENABLE, OUTPUT);
+
+  // Compensate for motor speed difference
+  analogWrite(MOTOR_LEFT_ENABLE, 200 - LEFT_MOTOR_SPEED_COMPENSATION);
+  analogWrite(MOTOR_RIGHT_ENABLE, 200);
+
+  Serial.begin(115200);
+}
+
+void loop() {
+  int distance = sonar.ping_cm();
+  
+  if (distance > 0 && distance <= SAFE_DISTANCE) {
+    stopMotors();
+    delay(500);
+    
+    if (random(2) == 0) {
+      turnLeft();
+    } else {
+      turnRight();
+    }
+    
+    delay(1000);
+  } else {
+    moveForward();
+  }
+}
+
+void moveForward() {
+  digitalWrite(MOTOR_LEFT_FWD, HIGH);
+  digitalWrite(MOTOR_LEFT_BWD, LOW);
+  digitalWrite(MOTOR_RIGHT_FWD, HIGH);
+  digitalWrite(MOTOR_RIGHT_BWD, LOW);
+}
+
+void stopMotors() {
+  digitalWrite(MOTOR_LEFT_FWD, LOW);
+  digitalWrite(MOTOR_LEFT_BWD, LOW);
+  digitalWrite(MOTOR_RIGHT_FWD, LOW);
+  digitalWrite(MOTOR_RIGHT_BWD, LOW);
+}
+
+void turnLeft() {
+  digitalWrite(MOTOR_LEFT_FWD, LOW);
+  digitalWrite(MOTOR_LEFT_BWD, HIGH);
+  digitalWrite(MOTOR_RIGHT_FWD, HIGH);
+  digitalWrite(MOTOR_RIGHT_BWD, LOW);
+}
+
+void turnRight() {
+  digitalWrite(MOTOR_LEFT_FWD, HIGH);
+  digitalWrite(MOTOR_LEFT_BWD, LOW);
+  digitalWrite(MOTOR_RIGHT_FWD, LOW);
+  digitalWrite(MOTOR_RIGHT_BWD, HIGH);
+}
+
+
+
+
+
+i am writing you different segments of code which i wrote to control my rc car both in autonomous and mannual mode through dashboard.
+but i am seeing serious issues like- loosing websocket connection, the car is not able to avoid obstacle and run autonomously, in manual mode the Car
+is not functioning according to joystick command, only the command left is working properly. so now analyze my all the code segments:
+my esp code is:
+
+#include <WiFi.h>
+#include <WebSocketsServer.h>
+#include <ArduinoJson.h>
+#include <NewPing.h>
+
+// WiFi Configuration
+#define WIFI_SSID "Redmi Note 9 Pro"
+#define WIFI_PASSWORD "22222222"
+#define WEBSOCKET_PORT 81
+
+// Motor Pin Definitions
+#define MOTOR_LEFT_FWD 25
+#define MOTOR_LEFT_BWD 26
+#define MOTOR_LEFT_ENABLE 33
+#define MOTOR_RIGHT_FWD 27 
+#define MOTOR_RIGHT_BWD 18
+#define MOTOR_RIGHT_ENABLE 19
+
+// Ultrasonic Sensor Pins
+#define TRIG_PIN 5
+#define ECHO_PIN 14
+
+// Autonomous Navigation Parameters
+#define MAX_DISTANCE 200
+#define SAFE_DISTANCE 30
+#define SCAN_INTERVAL 250  // ms between distance scans
+#define TURN_DURATION 800  // ms to turn when obstacle detected
+
+// Operational Modes
+enum OperationMode { MANUAL, AUTONOMOUS };
+OperationMode currentMode = MANUAL;
+
+WebSocketsServer webSocket(WEBSOCKET_PORT);
+NewPing sonar(TRIG_PIN, ECHO_PIN, MAX_DISTANCE);
+
+// Enhanced motor control with PWM speed control
+class MotorController {
+private:
+    int fwdPin, bwdPin, enablePin;
+    int baseSpeed = 200;
+    int currentSpeed = 0;
+
+public:
+    MotorController(int fwd, int bwd, int enable) {
+        fwdPin = fwd;
+        bwdPin = bwd;
+        enablePin = enable;
+        pinMode(fwdPin, OUTPUT);
+        pinMode(bwdPin, OUTPUT);
+        pinMode(enablePin, OUTPUT);
+    }
+
+    void forward(int speedFactor = 1) {
+        digitalWrite(fwdPin, HIGH);
+        digitalWrite(bwdPin, LOW);
+        currentSpeed = baseSpeed * speedFactor;
+        analogWrite(enablePin, currentSpeed);
+    }
+
+    void backward(int speedFactor = 1) {
+        digitalWrite(fwdPin, LOW);
+        digitalWrite(bwdPin, HIGH);
+        currentSpeed = baseSpeed * speedFactor;
+        analogWrite(enablePin, currentSpeed);
+    }
+
+    void stop() {
+        digitalWrite(fwdPin, LOW);
+        digitalWrite(bwdPin, LOW);
+        currentSpeed = 0;
+    }
+};
+
+MotorController leftMotor(MOTOR_LEFT_FWD, MOTOR_LEFT_BWD, MOTOR_LEFT_ENABLE);
+MotorController rightMotor(MOTOR_RIGHT_FWD, MOTOR_RIGHT_BWD, MOTOR_RIGHT_ENABLE);
+
+void moveForward() {
+    leftMotor.forward();
+    rightMotor.forward();
+}
+
+void moveBackward() {
+    leftMotor.backward();
+    rightMotor.backward();
+}
+
+void turnLeft() {
+    leftMotor.backward();
+    rightMotor.forward();
+}
+
+void turnRight() {
+    leftMotor.forward();
+    rightMotor.backward();
+}
+
+void stopMotors() {
+    leftMotor.stop();
+    rightMotor.stop();
+}
+
+void broadcastDistance(int distance) {
+    StaticJsonDocument<100> doc;
+    doc["type"] = "distance";
+    doc["value"] = distance;
+
+    String jsonString;
+    serializeJson(doc, jsonString);
+    webSocket.broadcastTXT(jsonString);
+}
+
+void autonomousNavigation() {
+    static unsigned long lastTurnTime = 0;
+    int distance = sonar.ping_cm();
+
+    if (distance > 0) {
+        broadcastDistance(distance);
+    }
+
+    // Enhanced obstacle avoidance
+    if (distance > 0 && distance <= SAFE_DISTANCE) {
+        stopMotors();
+        delay(300);
+        
+        if (millis() - lastTurnTime > TURN_DURATION * 2) {
+            if (random(2) == 0) {
+                turnLeft();
+            } else {
+                turnRight();
+            }
+            delay(TURN_DURATION);
+            lastTurnTime = millis();
+        }
+    } else if (distance == 0 || distance > SAFE_DISTANCE) {
+        moveForward();
+    }
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
+    if (type == WStype_TEXT) {
+        StaticJsonDocument<200> doc;
+        DeserializationError error = deserializeJson(doc, payload);
+
+        if (error) {
+            Serial.print("JSON parsing error: ");
+            Serial.println(error.c_str());
+            return;
+        }
+
+        const char* messageType = doc["type"];
+        
+        if (strcmp(messageType, "mode") == 0) {
+            const char* mode = doc["mode"];
+            currentMode = (strcmp(mode, "autonomous") == 0) ? AUTONOMOUS : MANUAL;
+            stopMotors();
+            Serial.printf("Switched to %s Mode\n", mode);
+        } 
+        else if (strcmp(messageType, "joystick") == 0 && currentMode == MANUAL) {
+            int x = doc["x"];
+            int y = doc["y"];
+
+            // More precise manual control
+            if (abs(y) > 20) {
+                y > 0 ? moveForward() : moveBackward();
+            } 
+            else if (abs(x) > 20) {
+                x > 0 ? turnRight() : turnLeft();
+            } 
+            else {
+                stopMotors();
+            }
+        }
+    }
+}
+
+void setupWiFi() {
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    WiFi.setAutoReconnect(true);
+    
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    
+    Serial.println("\nWiFi Connected");
+    Serial.println(WiFi.localIP());
+}
+
+void setupWebSocket() {
+    webSocket.begin();
+    webSocket.onEvent(webSocketEvent);
+}
+
+void setup() {
+    Serial.begin(115200);
+    randomSeed(analogRead(0));
+    
+    setupWiFi();
+    setupWebSocket();
+    
+    Serial.println("RC Car Control System Initialized");
+}
+
+void loop() {
+    webSocket.loop();
+
+    static unsigned long lastScanTime = 0;
+    if (currentMode == AUTONOMOUS && 
+        (millis() - lastScanTime >= SCAN_INTERVAL)) {
+        autonomousNavigation();
+        lastScanTime = millis();
+    }
+}
+
+dashboard code is :
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RC Car Control Dashboard</title>
+    <style>
+        /* Previous styles remain the same */
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .dashboard {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        .connection-status {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .connected {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .disconnected {
+            background-color: #f44336;
+            color: white;
+        }
+        img {
+            max-width: 100%;
+            border: 2px solid #333;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .data {
+            display: flex;
+            justify-content: space-around;
+            margin: 20px 0;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .mode-autonomous {
+            background-color: #FFA500;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Previous HTML remains the same -->
+        <h1>RC Car Control Dashboard</h1>
+        
+        <div id="connectionStatus" class="connection-status disconnected">
+            Disconnected from WebSocket
+        </div>
+        
+        <img id="cameraFeed" src="http://192.168.15.245:8080/video" 
+             alt="Live Camera Feed" 
+             onerror="this.src='placeholder.jpg'; this.alt='Camera Unavailable'"/>
+        
+        <div class="data">
+            <div>
+                <h3>Obstacle Distance</h3>
+                <p id="distance">0 cm</p>
+            </div>
+            <div>
+                <h3>Current Mode</h3>
+                <p id="currentMode">Manual</p>
+            </div>
+        </div>
+        
+        <button id="toggleMode">Switch to Autonomous</button>
+    </div>
+
+    <script>
+        const connectionStatus = document.getElementById('connectionStatus');
+        const cameraFeed = document.getElementById('cameraFeed');
+        const distanceSpan = document.getElementById('distance');
+        const currentModeSpan = document.getElementById('currentMode');
+        const toggleButton = document.getElementById('toggleMode');
+
+        function connectWebSocket() {
+            const ws = new WebSocket("ws://192.168.15.51:81");
+            let reconnectAttempts = 0;
+            const MAX_RECONNECT_ATTEMPTS = 2;
+
+            ws.onopen = () => {
+                console.log("WebSocket connection established");
+                connectionStatus.textContent = "Connected to WebSocket";
+                connectionStatus.classList.remove('disconnected');
+                connectionStatus.classList.add('connected');
+                reconnectAttempts = 0;
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    switch(data.type) {
+                        case "distance":
+                            distanceSpan.textContent = `${data.value} cm`;
+                            break;
+                    }
+                } catch (error) {
+                    console.error("WebSocket message parsing error:", error);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log("WebSocket connection closed");
+                connectionStatus.textContent = "Disconnected from WebSocket";
+                connectionStatus.classList.remove('connected');
+                connectionStatus.classList.add('disconnected');
+                
+                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    reconnectAttempts++;
+                    setTimeout(connectWebSocket, 3000 * reconnectAttempts);
+                }
+            };
+
+            return ws;
+        }
+
+        let ws = connectWebSocket();
+        let isAutonomous = false;
+
+        toggleButton.addEventListener('click', () => {
+            isAutonomous = !isAutonomous;
+            
+            toggleButton.textContent = isAutonomous 
+                ? "Switch to Manual" 
+                : "Switch to Autonomous";
+            
+            currentModeSpan.textContent = isAutonomous 
+                ? "Autonomous" 
+                : "Manual";
+            
+            toggleButton.classList.toggle('mode-autonomous');
+            
+            const modeMessage = JSON.stringify({
+                type: "mode",
+                mode: isAutonomous ? "autonomous" : "manual"
+            });
+            ws.send(modeMessage);
+        });
+    </script>
+</body>
+</html>
+my joystick controller python code is :
+import pygame
+import asyncio
+import websockets
+import json
+import sys
+
+# Configuration
+ESP32_IP = "10.15.17.65"
+WEBSOCKET_URL = f"ws://{ESP32_IP}:81"
+
+class RCCarController:
+    def __init__(self):
+        pygame.init()
+        pygame.joystick.init()
+        
+        self.setup_joystick()
+        
+        self.is_autonomous = False
+        self.current_mode = "manual"
+        self.websocket = None
+        self.connection_retries = 0
+        self.MAX_RETRIES = 3
+        
+    def setup_joystick(self):
+        try:
+            if pygame.joystick.get_count() == 0:
+                print("No joystick detected! Please connect a joystick.")
+                sys.exit(1)
+            
+            self.joystick = pygame.joystick.Joystick(0)
+            self.joystick.init()
+            print(f"Detected Joystick: {self.joystick.get_name()}")
+        except Exception as e:
+            print(f"Joystick initialization error: {e}")
+            sys.exit(1)
+
+    async def connect_websocket(self):
+        while self.connection_retries < self.MAX_RETRIES:
+            try:
+                self.websocket = await websockets.connect(WEBSOCKET_URL)
+                print("WebSocket connected successfully")
+                self.connection_retries = 0
+                return
+            except Exception as e:
+                self.connection_retries += 1
+                wait_time = min(2 ** self.connection_retries, 30)
+                print(f"Connection attempt {self.connection_retries} failed: {e}")
+                print(f"Retrying in {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+        
+        raise ConnectionError("Could not establish WebSocket connection")
+
+    async def send_mode_change(self, mode):
+        if self.websocket:
+            try:
+                message = json.dumps({
+                    "type": "mode",
+                    "mode": mode
+                })
+                await self.websocket.send(message)
+                print(f"Mode changed to: {mode}")
+            except Exception as e:
+                print(f"Mode change error: {e}")
+
+    async def send_joystick_data(self, x, y):
+        if self.websocket and self.current_mode == "manual":
+            try:
+                message = json.dumps({
+                    "type": "joystick",
+                    "x": x,
+                    "y": y
+                })
+                await self.websocket.send(message)
+            except Exception as e:
+                print(f"Joystick data send error: {e}")
+
+    async def handle_joystick_input(self):
+        DEADZONE = 0.15  # Slightly reduced deadzone
+        last_mode_button_state = False
+        
+        while True:
+            pygame.event.pump()
+            
+            x_axis = self.joystick.get_axis(0)
+            y_axis = self.joystick.get_axis(1)
+            
+            x_axis = 0 if abs(x_axis) < DEADZONE else x_axis
+            y_axis = 0 if abs(y_axis) < DEADZONE else y_axis
+            
+            x_normalized = int(x_axis * 100)
+            y_normalized = int(y_axis * 100)
+            
+            await self.send_joystick_data(x_normalized, y_normalized)
+            
+            current_mode_button_state = self.joystick.get_button(0)
+            if current_mode_button_state and not last_mode_button_state:
+                await self.toggle_mode()
+            
+            last_mode_button_state = current_mode_button_state
+            
+            await asyncio.sleep(0.05)
+
+    async def toggle_mode(self):
+        self.is_autonomous = not self.is_autonomous
+        self.current_mode = "autonomous" if self.is_autonomous else "manual"
+        await self.send_mode_change(self.current_mode)
+
+    async def main(self):
+        try:
+            await self.connect_websocket()
+            
+            tasks = [
+                asyncio.create_task(self.handle_joystick_input()),
+            ]
+            
+            await asyncio.gather(*tasks)
+        
+        except ConnectionError as e:
+            print(f"Connection Error: {e}")
+        except KeyboardInterrupt:
+            print("Controller stopped by user")
+        finally:
+            if self.websocket:
+                await self.websocket.close()
+            pygame.quit()
+
+if __name__ == "__main__":
+    try:
+        controller = RCCarController()
+        asyncio.run(controller.main())
+    except Exception as e:
+        print(f"Unexpected error: {e}")

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RC Car Control Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .dashboard {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        img {
+            max-width: 100%;
+            border: 2px solid #333;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .data {
+            display: flex;
+            justify-content: space-around;
+            margin: 20px 0;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <h1>RC Car Control Dashboard</h1>
+        
+        <!-- Live Camera Feed - Update IP -->
+        <img id="cameraFeed" src="http://192.168.0.194:8080/video" alt="Live Camera Feed" />
+        
+        <div class="data">
+            <div>
+                <h3>Obstacle Distance</h3>
+                <p id="distance">0 cm</p>
+            </div>
+            <div>
+                <h3>Current Mode</h3>
+                <p id="currentMode">Manual</p>
+            </div>
+        </div>
+        
+        <button id="toggleMode">Switch to Autonomous</button>
+    </div>
+
+    <script>
+        const cameraFeed = document.getElementById('cameraFeed');
+        const distanceSpan = document.getElementById('distance');
+        const currentModeSpan = document.getElementById('currentMode');
+        const toggleButton = document.getElementById('toggleMode');
+
+        // WebSocket Connection - Update IP
+        const ws = new WebSocket("ws://192.168.0.191:81");
+
+        ws.onopen = () => {
+            console.log("WebSocket connection established");
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === "distance") {
+                    distanceSpan.textContent = `${data.value} cm`;
+                }
+            } catch (error) {
+                console.error("WebSocket message error:", error);
+            }
+        };
+
+        ws.onerror = (error) => {
+            console.error("WebSocket error:", error);
+        };
+
+        // Mode Toggle
+        let isAutonomous = false;
+        toggleButton.addEventListener('click', () => {
+            isAutonomous = !isAutonomous;
+            
+            toggleButton.textContent = isAutonomous 
+                ? "Switch to Manual" 
+                : "Switch to Autonomous";
+            
+            currentModeSpan.textContent = isAutonomous 
+                ? "Autonomous" 
+                : "Manual";
+            
+            // Send mode change to ESP32
+            const modeMessage = JSON.stringify({
+                type: "mode",
+                mode: isAutonomous ? "autonomous" : "manual"
+            });
+            ws.send(modeMessage);
+        });
+    </script>
+</body>
+</html>

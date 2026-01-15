@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RC Car Control Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .dashboard {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        .connection-status {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .connected {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .disconnected {
+            background-color: #f44336;
+            color: white;
+        }
+        img {
+            max-width: 100%;
+            border: 2px solid #333;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .data {
+            display: flex;
+            justify-content: space-around;
+            margin: 20px 0;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <h1>RC Car Control Dashboard</h1>
+        
+        <div id="connectionStatus" class="connection-status disconnected">
+            Disconnected from WebSocket
+        </div>
+        
+        <img id="cameraFeed" src="http://192.168.0.194:8080/video" 
+             alt="Live Camera Feed" 
+             onerror="this.src='placeholder.jpg'; this.alt='Camera Unavailable'"/>
+        
+        <div class="data">
+            <div>
+                <h3>Obstacle Distance</h3>
+                <p id="distance">0 cm</p>
+            </div>
+            <div>
+                <h3>Current Mode</h3>
+                <p id="currentMode">Manual</p>
+            </div>
+        </div>
+        
+        <button id="toggleMode">Switch to Autonomous</button>
+    </div>
+
+    <script>
+        const connectionStatus = document.getElementById('connectionStatus');
+        const cameraFeed = document.getElementById('cameraFeed');
+        const distanceSpan = document.getElementById('distance');
+        const currentModeSpan = document.getElementById('currentMode');
+        const toggleButton = document.getElementById('toggleMode');
+
+        function connectWebSocket() {
+            const ws = new WebSocket("ws://192.168.15.51:81");
+
+            ws.onopen = () => {
+                console.log("WebSocket connection established");
+                connectionStatus.textContent = "Connected to WebSocket";
+                connectionStatus.classList.remove('disconnected');
+                connectionStatus.classList.add('connected');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    switch(data.type) {
+                        case "distance":
+                            distanceSpan.textContent = `${data.value} cm`;
+                            break;
+                        case "joystick":
+                            console.log("Joystick Data:", data);
+                            break;
+                    }
+                } catch (error) {
+                    console.error("WebSocket message error:", error);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log("WebSocket connection closed");
+                connectionStatus.textContent = "Disconnected from WebSocket";
+                connectionStatus.classList.remove('connected');
+                connectionStatus.classList.add('disconnected');
+                
+                // Reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            return ws;
+        }
+
+        let ws = connectWebSocket();
+        let isAutonomous = false;
+
+        toggleButton.addEventListener('click', () => {
+            isAutonomous = !isAutonomous;
+            
+            toggleButton.textContent = isAutonomous 
+                ? "Switch to Manual" 
+                : "Switch to Autonomous";
+            
+            currentModeSpan.textContent = isAutonomous 
+                ? "Autonomous" 
+                : "Manual";
+            
+            // Send mode change to ESP32
+            const modeMessage = JSON.stringify({
+                type: "mode",
+                mode: isAutonomous ? "autonomous" : "manual"
+            });
+            ws.send(modeMessage);
+        });
+    </script>
+</body>
+</html>

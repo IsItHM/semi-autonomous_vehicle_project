@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RC Car Control</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; }
+        img { border: 2px solid black; width: 80%; max-width: 640px; }
+        button { padding: 10px 20px; margin-top: 10px; }
+        .data { margin-top: 20px; font-size: 18px; }
+    </style>
+</head>
+<body>
+    <h1>RC Car Controller</h1>
+    <!-- Live Camera Feed -->
+    <img id="cameraFeed" src="http://192.168.0.194:8080/video" alt="Live Camera Feed" />
+    <div class="data">
+        <p>Obstacle Distance: <span id="distance">0</span> cm</p>
+        <button id="toggleMode">Switch to Autonomous</button>
+    </div>
+    <script>
+        // Reference to distance span
+        const distanceSpan = document.getElementById('distance');
+
+        // Connect to the ESP32 WebSocket server
+        const ws = new WebSocket("ws://192.168.0.206:81"); // Replace with your ESP32's WebSocket address
+
+        // Handle messages from the WebSocket server
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data); // Parse incoming JSON data
+                if (data.type === "distance") {
+                    // Update distance value on the dashboard
+                    distanceSpan.textContent = data.value;
+                }
+            } catch (error) {
+                console.error("Error processing WebSocket message:", error);
+            }
+        };
+
+        // Handle connection errors
+        ws.onerror = (error) => {
+            console.error("WebSocket error:", error);
+        };
+
+        // Toggle mode (Manual <--> Autonomous)
+        const toggleButton = document.getElementById('toggleMode');
+        let isAutonomous = false;
+        toggleButton.addEventListener('click', () => {
+            isAutonomous = !isAutonomous;
+            toggleButton.textContent = isAutonomous
+                ? "Switch to Manual"
+                : "Switch to Autonomous";
+
+            // Send the updated mode to the ESP32
+            const modeMessage = JSON.stringify({
+                type: "mode",
+                mode: isAutonomous ? "autonomous" : "manual"
+            });
+            ws.send(modeMessage);
+        });
+    </script>
+</body>
+</html>
